@@ -1,0 +1,61 @@
+name: Extract Cookies
+
+on:
+  workflow_dispatch:  # Allows manual triggering
+    inputs:
+      test_run:
+        description: 'Test run (optional)'
+        required: false
+        default: 'false'
+
+jobs:
+  extract-cookies:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install seleniumbase requests
+        
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y wget gnupg unzip
+        
+    - name: Setup Chrome and ChromeDriver
+      run: |
+        # Install Google Chrome
+        wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+        echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
+        sudo apt-get update
+        sudo apt-get install -y google-chrome-stable
+        
+    - name: Extract cookies
+      env:
+        SOLVECAPTCHA_API_KEY: ${{ secrets.SOLVECAPTCHA_API_KEY }}
+      run: |
+        python solve_captcha_get_cookies.py
+        
+    - name: Upload cookies as artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: cookies-${{ github.run_number }}
+        path: cookies.json
+        retention-days: 1
+        
+    - name: Show cookies (for debugging)
+      run: |
+        echo "Cookies extracted successfully!"
+        if [ -f cookies.json ]; then
+          echo "Cookie file size: $(wc -c < cookies.json) bytes"
+          echo "Number of cookies: $(jq 'length' cookies.json)"
+        fi
