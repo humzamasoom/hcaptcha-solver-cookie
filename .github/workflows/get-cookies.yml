@@ -20,8 +20,27 @@ jobs:
       uses: actions/setup-python@v4
       with:
         python-version: '3.11'
+    
+    - name: Cache pip packages
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}-seleniumbase
+        restore-keys: |
+          ${{ runner.os }}-pip-seleniumbase
+          ${{ runner.os }}-pip-
+    
+    - name: Cache Chrome installation
+      uses: actions/cache@v3
+      with:
+        path: |
+          /opt/google/chrome
+          /usr/bin/google-chrome*
+        key: ${{ runner.os }}-chrome-stable
+        restore-keys: |
+          ${{ runner.os }}-chrome-
         
-    - name: Install dependencies
+    - name: Install Python dependencies
       run: |
         python -m pip install --upgrade pip
         pip install seleniumbase requests
@@ -29,15 +48,19 @@ jobs:
     - name: Install system dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y wget gnupg unzip
+        sudo apt-get install -y wget gnupg unzip jq
         
-    - name: Setup Chrome and ChromeDriver
+    - name: Setup Chrome (if not cached)
       run: |
-        # Install Google Chrome
-        wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
-        echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
-        sudo apt-get update
-        sudo apt-get install -y google-chrome-stable
+        if ! command -v google-chrome &> /dev/null; then
+          echo "Installing Chrome..."
+          wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+          echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
+        else
+          echo "Chrome already installed (from cache)"
+        fi
         
     - name: Extract cookies
       env:
