@@ -73,42 +73,71 @@ def get_cookies():
         url = "https://bizfileonline.sos.ca.gov/search/business"
         sb.activate_cdp_mode(url, tzone="America/Panama")
         sb.sleep(3)
-        print(sb.get_page_source())
         
-        # Wait for and switch to the iframe
-        print("Waiting for iframe to be present...")
-        sb.wait_for_element_present('iframe#main-iframe')
-        sb.switch_to_frame('iframe#main-iframe')
-        print("Switched to iframe")
-        
-        # Extract sitekey from within the iframe
-        sitekey = sb.get_attribute('div[class="h-captcha"]', 'data-sitekey')
-        print(f"Found sitekey: {sitekey}")
-        
-        if sitekey:
+        # First try to find search input on main page (no captcha needed)
+        try:
+            print("Checking for search input on main page...")
+            sb.wait_for_element_present('input[placeholder="Search by name or file number"]', timeout=5)
+            print("Search input found on main page - no captcha needed!")
+            print("Waiting 5 seconds for cookies to be set...")
+            sb.sleep(5)
+            
+            # Get all cookies directly
+            cookies = sb.cdp.get_all_cookies()
+            
+            # Convert cookies to the format expected by requests
+            cookie_dict = {}
+            for cookie in cookies:
+                cookie_dict[cookie.name] = cookie.value
+                
+            return cookie_dict
+            
+        except Exception as e:
+            # Search input not found, proceed with captcha solving
+            print(f"Search input not found on main page: {e}")
+            print("Looking for captcha iframe...")
+            
             try:
-                # Solve captcha
-                captcha_data = solve_captcha(sitekey, url)
+                # Wait for and switch to the iframe (only exists if captcha is present)
+                print("Waiting for iframe to be present...")
+                sb.wait_for_element_present('iframe#main-iframe')
+                sb.switch_to_frame('iframe#main-iframe')
+                print("Switched to iframe")
                 
-                # Set useragent if provided
-                if captcha_data.get('useragent'):
-                    sb.execute_script(
-                        f'navigator.userAgent = "{captcha_data["useragent"]}";'
-                    )
+                # Extract sitekey from within the iframe
+                sitekey = sb.get_attribute('div[class="h-captcha"]', 'data-sitekey')
+                print(f"Found sitekey: {sitekey}")
                 
-                # Set both response fields
-                js_script = f'''
-                    document.querySelector("[name=h-captcha-response]").innerHTML = "{captcha_data['token']}";
-                    document.querySelector("[name=g-recaptcha-response]").innerHTML = "{captcha_data['token']}";
-                    if (typeof onCaptchaFinished === 'function') {{
-                        onCaptchaFinished("{captcha_data['token']}");
-                    }}
-                '''
-                sb.execute_script(js_script)
-                print("Captcha response set successfully")
-                
-            except Exception as e:
-                print(f"Failed to handle captcha: {str(e)}")
+                if sitekey:
+                    try:
+                        # Solve captcha
+                        captcha_data = solve_captcha(sitekey, url)
+                        
+                        # Set useragent if provided
+                        if captcha_data.get('useragent'):
+                            sb.execute_script(
+                                f'navigator.userAgent = "{captcha_data["useragent"]}";'
+                            )
+                        
+                        # Set both response fields
+                        js_script = f'''
+                            document.querySelector("[name=h-captcha-response]").innerHTML = "{captcha_data['token']}";
+                            document.querySelector("[name=g-recaptcha-response]").innerHTML = "{captcha_data['token']}";
+                            if (typeof onCaptchaFinished === 'function') {{
+                                onCaptchaFinished("{captcha_data['token']}");
+                            }}
+                        '''
+                        sb.execute_script(js_script)
+                        print("Captcha response set successfully")
+                        
+                    except Exception as captcha_error:
+                        print(f"Failed to handle captcha: {captcha_error}")
+                else:
+                    print("No captcha sitekey found in iframe")
+                    
+            except Exception as iframe_error:
+                print(f"No iframe found or iframe error: {iframe_error}")
+                print("Proceeding without captcha solving")
         
         # Wait a bit for all cookies to be set
         sb.sleep(5)
