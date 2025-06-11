@@ -1,5 +1,3 @@
-# Initial build - version 1.0
-
 # Use Ubuntu as base image
 FROM ubuntu:22.04
 
@@ -66,10 +64,10 @@ WORKDIR /workspace
 ENV CHROME_BIN=/usr/bin/google-chrome
 ENV CHROME_PATH=/usr/bin/google-chrome
 
-# Create non-root user for security
+# For GitHub Actions, we need to run as root
+# Create runner user but don't switch to it (GitHub Actions will handle this)
 RUN useradd -m -s /bin/bash runner
 RUN chown -R runner:runner /workspace
-USER runner
 
 # Set the default command
 CMD ["/bin/bash"]
