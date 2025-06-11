@@ -7,15 +7,18 @@ on:
         description: 'Test run (optional)'
         required: false
         default: 'false'
+      force_rebuild:
+        description: 'Force rebuild Docker image'
+        required: false
+        default: 'false'
   push:
     paths:
       - 'Dockerfile'  # Rebuild image when Dockerfile changes
 
 jobs:
-  # Build Docker image (only when Dockerfile changes)
+  # Build Docker image
   build-image:
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && contains(github.event.head_commit.modified, 'Dockerfile')
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
@@ -29,8 +32,19 @@ jobs:
         registry: ghcr.io
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Check if image exists
+      id: check-image
+      run: |
+        if docker manifest inspect ghcr.io/${{ github.repository }}/cookie-extractor:latest >/dev/null 2>&1; then
+          echo "exists=true" >> $GITHUB_OUTPUT
+        else
+          echo "exists=false" >> $GITHUB_OUTPUT
+        fi
+      continue-on-error: true
         
     - name: Build and push Docker image
+      if: steps.check-image.outputs.exists == 'false' || github.event.inputs.force_rebuild == 'true' || github.event_name == 'push'
       uses: docker/build-push-action@v5
       with:
         context: .
@@ -48,7 +62,6 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
     needs: [build-image]
-    if: always() && (needs.build-image.result == 'success' || needs.build-image.result == 'skipped')
     
     steps:
     - name: Checkout repository
