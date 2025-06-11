@@ -69,7 +69,7 @@ def solve_captcha(sitekey, pageurl):
         raise
 
 def get_cookies():
-    with SB(uc=True, locale="en", headless=True) as sb:
+    with SB(uc=True, locale="en", headless=True, xvfb=True) as sb:
         url = "https://bizfileonline.sos.ca.gov/search/business"
         sb.activate_cdp_mode(url, tzone="America/Panama")
         sb.sleep(3)
