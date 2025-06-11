@@ -73,6 +73,7 @@ def get_cookies():
         url = "https://bizfileonline.sos.ca.gov/search/business"
         sb.activate_cdp_mode(url, tzone="America/Panama")
         sb.sleep(3)
+        print(sb.get_page_source)
         
         # Wait for and switch to the iframe
         print("Waiting for iframe to be present...")
