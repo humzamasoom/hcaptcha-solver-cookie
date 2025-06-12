@@ -1,21 +1,21 @@
-# Multi-stage build for smaller final image
+# Optimized but FUNCTIONAL build
 FROM ubuntu:22.04 AS base
 
-# Prevent interactive prompts during package installation
-ENV DEBIAN_FRONTEND=noninteractive
-ENV TZ=UTC
+# Prevent interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive \
+    TZ=UTC \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
 
-# Install system dependencies in a single layer
-RUN apt-get update && apt-get install -y \
+# Install ALL necessary packages in one optimized layer
+RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
-    python3-venv \
     wget \
     gnupg \
-    unzip \
-    curl \
-    jq \
     ca-certificates \
+    # Chrome dependencies (ESSENTIAL - cannot remove!)
     fonts-liberation \
     libasound2 \
     libatk-bridge2.0-0 \
@@ -37,56 +37,34 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
-# Install Google Chrome in separate layer for better caching
+# Install Chrome (MUST keep - SeleniumBase needs it)
 RUN wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor > /usr/share/keyrings/google-chrome-keyring.gpg \
     && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome-keyring.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list \
     && apt-get update \
-    && apt-get install -y google-chrome-stable \
+    && apt-get install -y --no-install-recommends google-chrome-stable \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
-# === PYTHON DEPENDENCIES STAGE ===
-FROM base AS python-deps
-
+# === PYTHON SETUP ===
 # Create symlink for python
 RUN ln -s /usr/bin/python3 /usr/bin/python
 
-# Upgrade pip in separate layer
-RUN python -m pip install --upgrade pip
+# Install Python packages with proper dependencies (NOT --no-deps!)
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r /tmp/requirements.txt && \
+    # Verify installation
+    python -c "import seleniumbase, requests, selenium, pandas; print('All packages working')"
 
-# Copy requirements.txt if it exists, otherwise create a minimal one
-COPY requirements.tx[t] /tmp/
-RUN if [ ! -f /tmp/requirements.txt ]; then \
-        echo "seleniumbase" > /tmp/requirements.txt && \
-        echo "requests" >> /tmp/requirements.txt && \
-        echo "selenium" >> /tmp/requirements.txt && \
-        echo "pandas" >> /tmp/requirements.txt; \
-    fi
+# Set environment variables
+ENV CHROME_BIN=/usr/bin/google-chrome \
+    CHROME_PATH=/usr/bin/google-chrome
 
-# Install Python packages with optimizations
-RUN pip install --no-cache-dir \
-    --disable-pip-version-check \
-    -r /tmp/requirements.txt \
-    && python -c "import seleniumbase; import requests; import selenium; import pandas; print('All packages imported successfully')"
-
-# === FINAL STAGE ===
-FROM python-deps AS final
-
-# Set environment variables for Chrome
-ENV CHROME_BIN=/usr/bin/google-chrome
-ENV CHROME_PATH=/usr/bin/google-chrome
-ENV PYTHONUNBUFFERED=1
-ENV PYTHONDONTWRITEBYTECODE=1
-
-# Create working directory
+# Create workspace
 WORKDIR /workspace
+RUN useradd -m runner && chown runner:runner /workspace
 
-# Create runner user but don't switch to it (GitHub Actions will handle this)
-RUN useradd -m -s /bin/bash runner \
-    && chown -R runner:runner /workspace
+# Quick verification (but don't pre-warm - that's what was slow!)
+RUN google-chrome --version
 
-# Pre-warm Python imports to speed up first run
-RUN python -c "import seleniumbase, requests, json, time, sys, os" || true
-
-# Set the default command
 CMD ["/bin/bash"] 
