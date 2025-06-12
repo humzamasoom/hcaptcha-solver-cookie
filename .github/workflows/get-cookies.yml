@@ -41,7 +41,7 @@ jobs:
       contents: read
       packages: write
     outputs:
-      image-tag: ${{ steps.meta.outputs.tags }}
+      image-tag: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
       image-digest: ${{ steps.build.outputs.digest }}
     
     steps:
@@ -66,10 +66,9 @@ jobs:
       with:
         images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
         tags: |
-          type=ref,event=branch
-          type=ref,event=pr
-          type=sha,prefix={{branch}}-
           type=raw,value=latest,enable={{is_default_branch}}
+          type=ref,event=branch
+          type=sha,prefix={{branch}}-
           
     - name: Build and push Docker image
       id: build
@@ -125,13 +124,8 @@ jobs:
     - name: Determine Docker image to use
       id: image
       run: |
-        if [ "${{ needs.build-image.result }}" == "success" ]; then
-          # Use the freshly built image
-          IMAGE_TAG="${{ needs.build-image.outputs.image-tag }}"
-        else
-          # Use the latest pre-built image
-          IMAGE_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
-        fi
+        # Always use the latest tag for simplicity
+        IMAGE_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
         echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
         echo "Using Docker image: $IMAGE_TAG"
         
