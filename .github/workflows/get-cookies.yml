@@ -1,95 +1,140 @@
-name: Extract Cookies
+name: California Business Scraper
 
 on:
   workflow_dispatch:  # Allows manual triggering
     inputs:
+      file_numbers:
+        description: 'Business file numbers to search for (comma-separated or JSON array, e.g., "123,456,789" or ["123","456","789"])'
+        required: false
+        default: '202250419109'
       test_run:
         description: 'Test run (optional)'
-        required: false
-        default: 'false'
-      force_rebuild:
-        description: 'Force rebuild Docker image'
         required: false
         default: 'false'
   push:
     paths:
       - 'Dockerfile'  # Rebuild image when Dockerfile changes
+  schedule:
+    # Run daily at 9 AM UTC (optional - remove if you don't want scheduled runs)
+    - cron: '0 9 * * *'
 
 jobs:
-  # Build Docker image
-  build-image:
+  # Run the complete scraping process
+  scrape-california-business:
     runs-on: ubuntu-latest
+    
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
       
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-      
-    - name: Log in to GitHub Container Registry
-      uses: docker/login-action@v3
-      with:
-        registry: ghcr.io
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-    
-    - name: Check if image exists
-      id: check-image
+    - name: Build Docker image locally
       run: |
-        if docker manifest inspect ghcr.io/${{ github.repository }}/cookie-extractor:latest >/dev/null 2>&1; then
-          echo "exists=true" >> $GITHUB_OUTPUT
+        echo "Building Docker image locally..."
+        docker build -t california-scraper:latest .
+        echo "Docker image built successfully"
+        
+    - name: Verify Docker image
+      run: |
+        docker images california-scraper:latest
+        echo "Verifying environment in container..."
+        docker run --rm california-scraper:latest python --version
+        docker run --rm california-scraper:latest google-chrome --version
+        
+    - name: Parse and validate file numbers
+      id: parse-files
+      run: |
+        FILE_NUMBERS="${{ github.event.inputs.file_numbers || '202250419109' }}"
+        echo "Raw input: $FILE_NUMBERS"
+        
+        # Count how many file numbers we have
+        if [[ "$FILE_NUMBERS" == *"["* ]]; then
+          # JSON array format
+          COUNT=$(echo "$FILE_NUMBERS" | jq '. | length' 2>/dev/null || echo "1")
         else
-          echo "exists=false" >> $GITHUB_OUTPUT
+          # Comma-separated format
+          COUNT=$(echo "$FILE_NUMBERS" | tr ',' '\n' | wc -l)
         fi
-      continue-on-error: true
         
-    - name: Build and push Docker image
-      if: steps.check-image.outputs.exists == 'false' || github.event.inputs.force_rebuild == 'true' || github.event_name == 'push'
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        push: true
-        tags: ghcr.io/${{ github.repository }}/cookie-extractor:latest
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-
-  # Extract cookies using Docker container
-  extract-cookies:
-    runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/${{ github.repository }}/cookie-extractor:latest
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-    needs: [build-image]
-    
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      
-    - name: Verify environment
-      run: |
-        echo "Python version: $(python --version)"
-        echo "Chrome version: $(google-chrome --version)"
-        echo "SeleniumBase installed: $(pip show seleniumbase | grep Version)"
+        echo "file_count=$COUNT" >> $GITHUB_OUTPUT
+        echo "Detected $COUNT file numbers to process"
         
-    - name: Extract cookies
+    - name: Run California Business Scraper
       env:
         SOLVECAPTCHA_API_KEY: ${{ secrets.SOLVECAPTCHA_API_KEY }}
+        # File numbers to search (can be overridden via workflow input)
+        FILE_NUMBERS: ${{ github.event.inputs.file_numbers || '202250419109' }}
       run: |
-        python solve_captcha_get_cookies.py
+        echo "Starting California business scraper..."
+        echo "File numbers: $FILE_NUMBERS"
+        echo "Expected file count: ${{ steps.parse-files.outputs.file_count }}"
+        echo "Output format: JSON"
         
-    - name: Upload cookies as artifact
+        # Run the scraper in Docker container
+        docker run --rm \
+          -e SOLVECAPTCHA_API_KEY="${SOLVECAPTCHA_API_KEY}" \
+          -e FILE_NUMBERS="${FILE_NUMBERS}" \
+          -v "$(pwd):/workspace" \
+          -w /workspace \
+          california-scraper:latest \
+          python solve_captcha_get_cookies.py
+        
+    - name: List generated files
+      run: |
+        echo "Files in workspace:"
+        ls -la
+        echo "Looking for JSON files:"
+        find . -name "*.json" -type f
+        
+    - name: Upload scraped data as artifact
       uses: actions/upload-artifact@v4
       with:
-        name: cookies-${{ github.run_number }}
-        path: cookies.json
-        retention-days: 1
+        name: scraped-business-data-${{ steps.parse-files.outputs.file_count }}-files-${{ github.run_number }}
+        path: |
+          scraped_data_*.json
+        retention-days: 30
+        if-no-files-found: warn
         
-    - name: Show cookies (for debugging)
+    - name: Show scraping summary
       run: |
-        echo "Cookies extracted successfully!"
-        if [ -f cookies.json ]; then
-          echo "Cookie file size: $(wc -c < cookies.json) bytes"
-          echo "Number of cookies: $(jq 'length' cookies.json)"
+        echo "=== SCRAPING SUMMARY ==="
+        if [ -f scraped_data_*.json ]; then
+          for file in scraped_data_*.json; do
+            if [ -f "$file" ]; then
+              echo "Scraped data file: $file"
+              echo "File size: $(wc -c < "$file") bytes"
+              
+              # Try to extract summary from the JSON structure
+              if command -v jq >/dev/null 2>&1; then
+                echo "Metadata:"
+                jq -r '.metadata // empty' "$file" 2>/dev/null || echo "  No metadata found"
+                
+                echo "Results summary:"
+                jq -r '.results | to_entries | map("  File \(.key): \(.value.businesses_found // 0) businesses (\(.value.success // false))") | .[]' "$file" 2>/dev/null || echo "  Unable to parse results"
+                
+                TOTAL_BUSINESSES=$(jq '[.results[] | .businesses_found // 0] | add // 0' "$file" 2>/dev/null || echo "0")
+                SUCCESSFUL_FILES=$(jq '[.results[] | select(.success == true)] | length // 0' "$file" 2>/dev/null || echo "0")
+                TOTAL_FILES=$(jq '.results | length // 0' "$file" 2>/dev/null || echo "0")
+                
+                echo "📊 Total files processed: $TOTAL_FILES"
+                echo "✅ Successful files: $SUCCESSFUL_FILES"
+                echo "🏢 Total businesses found: $TOTAL_BUSINESSES"
+              else
+                echo "jq not available, showing file size only"
+              fi
+              echo "📄 Output format: JSON"
+              echo "---"
+            fi
+          done
+        else
+          echo "No scraped data files found"
         fi
+        echo "========================"
+        
+    # Optional: Commit scraped data back to repository (uncomment if desired)
+    # - name: Commit scraped data to repository
+    #   run: |
+    #     git config --local user.email "action@github.com"
+    #     git config --local user.name "GitHub Action"
+    #     git add scraped_data_*.json
+    #     git commit -m "Add scraped business data for ${{ steps.parse-files.outputs.file_count }} file numbers" || exit 0
+    #     git push 
