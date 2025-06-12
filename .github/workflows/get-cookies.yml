@@ -102,18 +102,7 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
       
-    - name: Cache dependencies and Docker layers
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cache/pip
-          /tmp/.buildx-cache
-          ~/.cache/docker
-        key: scraper-deps-${{ runner.os }}-${{ hashFiles('requirements.txt') }}-${{ hashFiles('Dockerfile') }}
-        restore-keys: |
-          scraper-deps-${{ runner.os }}-${{ hashFiles('requirements.txt') }}-
-          scraper-deps-${{ runner.os }}-
-      
+
     - name: Log in to Container Registry
       uses: docker/login-action@v3
       with:
