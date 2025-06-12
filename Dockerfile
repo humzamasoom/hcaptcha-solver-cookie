@@ -72,3 +72,5 @@ RUN chown -R runner:runner /workspace
 
 # Set the default command
 CMD ["/bin/bash"] 
+
+#Adding a line to build Docker Image
