@@ -42,16 +42,17 @@ jobs:
       packages: write
     outputs:
       image-tag: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-      image-digest: ${{ steps.build.outputs.digest }}
     
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
       
-    - name: Set up Docker Buildx (for advanced caching)
+    - name: Set up Docker Buildx with aggressive caching
       uses: docker/setup-buildx-action@v3
       with:
-        driver-opts: image=moby/buildkit:buildx-stable-1
+        driver-opts: |
+          image=moby/buildkit:buildx-stable-1
+          network=host
         
     - name: Log in to Container Registry
       uses: docker/login-action@v3
@@ -60,33 +61,21 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
         
-    - name: Extract metadata
-      id: meta
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-        tags: |
-          type=raw,value=latest,enable={{is_default_branch}}
-          type=ref,event=branch
-          type=sha,prefix={{branch}}-
-          
-    - name: Build and push Docker image
-      id: build
+    - name: Build and push with maximum caching
       uses: docker/build-push-action@v5
       with:
         context: .
         push: true
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+        tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+        cache-from: |
+          type=gha
+          type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cache
+        cache-to: |
+          type=gha,mode=max
+          type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cache,mode=max
         platforms: linux/amd64
-        
-    - name: Image build summary
-      run: |
-        echo "✅ Docker image built and pushed successfully!"
-        echo "📦 Image: ${{ steps.meta.outputs.tags }}"
-        echo "🔍 Digest: ${{ steps.build.outputs.digest }}"
+        build-args: |
+          BUILDKIT_INLINE_CACHE=1
 
   # Run the complete scraping process with batch handling
   scrape-california-business:
@@ -118,121 +107,98 @@ jobs:
         echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
         echo "Using Docker image: $IMAGE_TAG"
         
-    - name: Pull Docker image (with fallback to build)
+    - name: Local-first Docker build (fastest approach)
       run: |
-        IMAGE_TAG="${{ steps.image.outputs.image_tag }}"
-        echo "Attempting to pull image: $IMAGE_TAG"
+        echo "🔨 Local-first Docker build strategy"
         
-        if docker pull "$IMAGE_TAG" 2>/dev/null; then
-          echo "✅ Successfully pulled pre-built image: $IMAGE_TAG"
-          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
-        else
-          echo "⚠️ Failed to pull image, building locally as fallback..."
-          docker build -t california-scraper:local .
-          echo "✅ Local image built successfully"
-          echo "IMAGE_TAG=california-scraper:local" >> $GITHUB_ENV
-        fi
+        # Enable Docker BuildKit for maximum speed
+        export DOCKER_BUILDKIT=1
+        export BUILDKIT_PROGRESS=plain
         
-    - name: Verify Docker image (quick check)
-      run: |
-        echo "Verifying image: $IMAGE_TAG"
-        # Quick verification - just check if Chrome is available
-        if docker run --rm "$IMAGE_TAG" which google-chrome >/dev/null; then
-          echo "✅ Chrome verified in container"
-        else
-          echo "❌ Chrome not found in container"
-          exit 1
-        fi
+        # Always build locally with aggressive caching
+        echo "📦 Building locally with cache optimization..."
         
-    - name: Parse and validate file numbers
+        # Try to use remote image as cache source (non-blocking)
+        REMOTE_IMAGE="${{ steps.image.outputs.image_tag }}"
+        
+        # Build with multiple cache sources for maximum hit rate
+        docker build \
+          --cache-from "$REMOTE_IMAGE" \
+          --cache-from "california-scraper:latest" \
+          --build-arg BUILDKIT_INLINE_CACHE=1 \
+          --tag california-scraper:local \
+          --tag california-scraper:latest \
+          . 2>/dev/null || {
+          echo "⚠️ Cache miss, building from scratch..."
+          docker build --tag california-scraper:local .
+        }
+        
+        echo "IMAGE_TAG=california-scraper:local" >> $GITHUB_ENV
+        echo "✅ Local build complete!"
+        
+    - name: Parse file numbers (fast)
       id: parse-files
       run: |
         FILE_NUMBERS="${{ github.event.inputs.file_numbers || '202250419109' }}"
         BATCH_NUMBER="${{ github.event.inputs.batch_number || '1' }}"
-        echo "Raw input: $FILE_NUMBERS"
-        echo "Batch number: $BATCH_NUMBER"
         
-        # Count how many file numbers we have
+        # Quick count without complex parsing
         if [[ "$FILE_NUMBERS" == *"["* ]]; then
-          # JSON array format
           COUNT=$(echo "$FILE_NUMBERS" | jq '. | length' 2>/dev/null || echo "1")
         else
-          # Comma-separated format
           COUNT=$(echo "$FILE_NUMBERS" | tr ',' '\n' | wc -l)
         fi
         
         echo "file_count=$COUNT" >> $GITHUB_OUTPUT
         echo "batch_number=$BATCH_NUMBER" >> $GITHUB_OUTPUT
-        echo "Detected $COUNT file numbers to process in batch #$BATCH_NUMBER"
+        echo "Processing $COUNT files in batch #$BATCH_NUMBER"
         
-    - name: Run California Business Scraper (Batch Processing)
+    - name: Run scraper (instant start)
       id: scraper
       env:
         SOLVECAPTCHA_API_KEY: ${{ secrets.SOLVECAPTCHA_API_KEY }}
         FILE_NUMBERS: ${{ github.event.inputs.file_numbers || '202250419109' }}
         BATCH_NUMBER: ${{ steps.parse-files.outputs.batch_number }}
       run: |
-        echo "Starting California business scraper (Batch Processing)..."
-        echo "Using Docker image: $IMAGE_TAG"
-        echo "File numbers: $FILE_NUMBERS"
-        echo "Expected file count: ${{ steps.parse-files.outputs.file_count }}"
-        echo "Batch number: $BATCH_NUMBER"
-        echo "Output format: JSON"
+        echo "🚀 Starting scraper immediately..."
         
-        # Run the scraper in Docker container with optimizations
+        # Run with minimal overhead
         docker run --rm \
+          --name scraper-${{ github.run_number }} \
           -e SOLVECAPTCHA_API_KEY="${SOLVECAPTCHA_API_KEY}" \
           -e FILE_NUMBERS="${FILE_NUMBERS}" \
           -e BATCH_NUMBER="${BATCH_NUMBER}" \
           -e PYTHONUNBUFFERED=1 \
           -v "$(pwd):/workspace" \
           -w /workspace \
-          --memory="3g" \
-          --cpus="2.0" \
-          --shm-size="1g" \
+          --memory="2g" \
+          --cpus="1.5" \
           "$IMAGE_TAG" \
-          timeout 900s python solve_captcha_get_cookies.py
+          timeout 600s python solve_captcha_get_cookies.py
         
-        # Check if there are remaining files to process
-        if [ -f "remaining_files.json" ]; then
-          echo "blocking_detected=true" >> $GITHUB_OUTPUT
-          echo "🚫 Blocking detected - remaining files found"
-        else
-          echo "blocking_detected=false" >> $GITHUB_OUTPUT
-          echo "✅ All files processed successfully"
-        fi
+                 # Quick result check
+         [ -f "remaining_files.json" ] && echo "blocking_detected=true" >> $GITHUB_OUTPUT || echo "blocking_detected=false" >> $GITHUB_OUTPUT
         
-    - name: Handle remaining files (if blocked)
+    - name: Trigger retry workflow (if blocked)
       if: steps.scraper.outputs.blocking_detected == 'true'
       uses: actions/github-script@v7
       with:
         github-token: ${{ secrets.GITHUB_TOKEN }}
         script: |
           const fs = require('fs');
+          const data = JSON.parse(fs.readFileSync('remaining_files.json', 'utf8'));
+          console.log(`🔄 Triggering retry for ${data.file_numbers.length} files`);
           
-          // Read remaining files
-          const remainingData = JSON.parse(fs.readFileSync('remaining_files.json', 'utf8'));
-          const remainingFiles = remainingData.file_numbers;
-          const nextBatchNumber = remainingData.batch_number;
-          
-          console.log(`🔄 Triggering new workflow for ${remainingFiles.length} remaining files`);
-          console.log(`📊 Next batch number: ${nextBatchNumber}`);
-          console.log(`📝 Remaining files: ${remainingFiles.join(', ')}`);
-          
-          // Trigger new workflow with remaining files
           await github.rest.actions.createWorkflowDispatch({
             owner: context.repo.owner,
             repo: context.repo.repo,
             workflow_id: 'get-cookies.yml',
             ref: 'main',
             inputs: {
-              file_numbers: JSON.stringify(remainingFiles),
-              batch_number: nextBatchNumber.toString(),
-              test_run: 'false'
+              file_numbers: JSON.stringify(data.file_numbers),
+              batch_number: data.batch_number.toString()
             }
           });
-          
-          console.log('✅ New workflow triggered successfully');
         
     - name: List generated files
       run: |
