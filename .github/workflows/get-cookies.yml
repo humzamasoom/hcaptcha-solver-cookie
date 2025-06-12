@@ -107,34 +107,38 @@ jobs:
         echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
         echo "Using Docker image: $IMAGE_TAG"
         
-    - name: Local-first Docker build (fastest approach)
+    - name: Optimized Docker setup (targeting 10-15 seconds)
       run: |
-        echo "🔨 Local-first Docker build strategy"
+        IMAGE_TAG="${{ steps.image.outputs.image_tag }}"
+        echo "🚀 Optimized Docker setup: $IMAGE_TAG"
         
-        # Enable Docker BuildKit for maximum speed
+        # Enable Docker BuildKit for faster operations
         export DOCKER_BUILDKIT=1
-        export BUILDKIT_PROGRESS=plain
         
-        # Always build locally with aggressive caching
-        echo "📦 Building locally with cache optimization..."
+        # Try multiple strategies for fastest pull
+        echo "📦 Attempting pull strategies..."
         
-        # Try to use remote image as cache source (non-blocking)
-        REMOTE_IMAGE="${{ steps.image.outputs.image_tag }}"
+        # Strategy 1: Direct pull (usually fastest if image exists)
+        if timeout 45s docker pull "$IMAGE_TAG" 2>/dev/null; then
+          echo "✅ Pre-built image pulled successfully"
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
+          
+        # Strategy 2: Check if we can build with cache faster than pull
+        elif [ -f "Dockerfile" ]; then
+          echo "🔨 Building with cache (may be faster than remote pull)..."
+          docker build \
+            --cache-from "$IMAGE_TAG" \
+            --build-arg BUILDKIT_INLINE_CACHE=1 \
+            -t california-scraper:local \
+            . || docker build -t california-scraper:local .
+          echo "IMAGE_TAG=california-scraper:local" >> $GITHUB_ENV
+          
+        else
+          echo "❌ No Dockerfile found and pull failed"
+          exit 1
+        fi
         
-        # Build with multiple cache sources for maximum hit rate
-        docker build \
-          --cache-from "$REMOTE_IMAGE" \
-          --cache-from "california-scraper:latest" \
-          --build-arg BUILDKIT_INLINE_CACHE=1 \
-          --tag california-scraper:local \
-          --tag california-scraper:latest \
-          . 2>/dev/null || {
-          echo "⚠️ Cache miss, building from scratch..."
-          docker build --tag california-scraper:local .
-        }
-        
-        echo "IMAGE_TAG=california-scraper:local" >> $GITHUB_ENV
-        echo "✅ Local build complete!"
+        echo "✅ Docker setup complete!"
         
     - name: Parse file numbers (fast)
       id: parse-files
