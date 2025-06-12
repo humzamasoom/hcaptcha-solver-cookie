@@ -1,5 +1,5 @@
 # Multi-stage build for smaller final image
-FROM ubuntu:22.04 as base
+FROM ubuntu:22.04 AS base
 
 # Prevent interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
@@ -46,7 +46,7 @@ RUN wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | gpg --dearm
     && apt-get clean
 
 # === PYTHON DEPENDENCIES STAGE ===
-FROM base as python-deps
+FROM base AS python-deps
 
 # Create symlink for python
 RUN ln -s /usr/bin/python3 /usr/bin/python
@@ -54,8 +54,14 @@ RUN ln -s /usr/bin/python3 /usr/bin/python
 # Upgrade pip in separate layer
 RUN python -m pip install --upgrade pip
 
-# Copy requirements first for better Docker layer caching
-COPY requirements.txt /tmp/requirements.txt
+# Copy requirements.txt if it exists, otherwise create a minimal one
+COPY requirements.tx[t] /tmp/
+RUN if [ ! -f /tmp/requirements.txt ]; then \
+        echo "seleniumbase" > /tmp/requirements.txt && \
+        echo "requests" >> /tmp/requirements.txt && \
+        echo "selenium" >> /tmp/requirements.txt && \
+        echo "pandas" >> /tmp/requirements.txt; \
+    fi
 
 # Install Python packages with optimizations
 RUN pip install --no-cache-dir \
@@ -64,7 +70,7 @@ RUN pip install --no-cache-dir \
     && python -c "import seleniumbase; import requests; import selenium; import pandas; print('All packages imported successfully')"
 
 # === FINAL STAGE ===
-FROM python-deps as final
+FROM python-deps AS final
 
 # Set environment variables for Chrome
 ENV CHROME_BIN=/usr/bin/google-chrome
