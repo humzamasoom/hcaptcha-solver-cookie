@@ -456,13 +456,13 @@ def parse_file_numbers(file_numbers_input):
     
     return file_numbers
 
-def save_partial_results(results: Dict[str, Any], batch_number: int = 1):
+def save_partial_results(results: Dict[str, Any], request_id: str = 'unknown'):
     """Save partial results to file"""
     if not results:
         return None
         
     timestamp = time.strftime('%Y%m%d_%H%M%S', time.gmtime())
-    filename = f'scraped_data_partial_batch_{batch_number}_{timestamp}.json'
+    filename = f'scraped_data_partial_{request_id}_{timestamp}.json'
     
     with open(filename, 'w') as f:
         json.dump(results, f, indent=2)
@@ -470,7 +470,7 @@ def save_partial_results(results: Dict[str, Any], batch_number: int = 1):
     print(f"💾 Partial results saved to: {filename}")
     return filename
 
-def trigger_new_workflow(remaining_files: List[str], batch_number: int):
+def trigger_new_workflow(remaining_files: List[str], request_id: str):
     """Trigger a new workflow with remaining file numbers"""
     if not remaining_files:
         return
@@ -480,15 +480,21 @@ def trigger_new_workflow(remaining_files: List[str], batch_number: int):
     # Set environment variable for the next workflow
     remaining_files_json = json.dumps(remaining_files)
     
+    # Generate a new request ID for the retry workflow
+    import uuid
+    retry_request_id = str(uuid.uuid4())
+    
     # Create a file with remaining file numbers for GitHub Actions to pick up
     with open('remaining_files.json', 'w') as f:
         json.dump({
             'file_numbers': remaining_files,
-            'batch_number': batch_number + 1,
+            'request_id': retry_request_id,
+            'original_request_id': request_id,
             'trigger_time': time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())
         }, f, indent=2)
     
     print(f"📝 Remaining files saved to: remaining_files.json")
+    print(f"🆔 New request ID: {retry_request_id}")
     print(f"File numbers: {remaining_files}")
 
 def main():
@@ -496,11 +502,11 @@ def main():
     try:
         # Get file numbers from environment variable
         file_numbers_input = os.getenv('FILE_NUMBERS', '202250419109')
-        batch_number = int(os.getenv('BATCH_NUMBER', '1'))
+        request_id = os.getenv('REQUEST_ID', 'fallback-unknown')
         
         file_numbers = parse_file_numbers(file_numbers_input)
         
-        print(f"🚀 Starting California business scraper (Batch #{batch_number})")
+        print(f"🚀 Starting California business scraper (Request ID: {request_id})")
         print(f"File numbers to process: {file_numbers}")
         print(f"Total files: {len(file_numbers)}")
         
@@ -536,17 +542,17 @@ def main():
                             'total_files_requested': len(file_numbers),
                             'files_processed': len(all_results),
                             'files_remaining': len(remaining_files),
-                            'batch_number': batch_number,
+                            'request_id': request_id,
                             'blocked': True,
                             'scrape_timestamp': time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())
                         },
                         'results': all_results
                     }
                     
-                    save_partial_results(final_data, batch_number)
+                    save_partial_results(final_data, request_id)
                 
                 # Trigger new workflow for remaining files
-                trigger_new_workflow(remaining_files, batch_number)
+                trigger_new_workflow(remaining_files, request_id)
                 
                 # Exit with partial success
                 print(f"\n🏁 Partial processing complete!")
@@ -579,7 +585,7 @@ def main():
                     'total_files_requested': len(file_numbers),
                     'files_processed': len(all_results),
                     'files_remaining': 0,
-                    'batch_number': batch_number,
+                    'request_id': request_id,
                     'blocked': False,
                     'scrape_timestamp': time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())
                 },
@@ -590,7 +596,7 @@ def main():
             if len(file_numbers) == 1:
                 output_file = f'scraped_data_{file_numbers[0]}.json'
             else:
-                output_file = f'scraped_data_batch_{batch_number}_{len(file_numbers)}_files.json'
+                output_file = f'scraped_data_{request_id}_{len(file_numbers)}_files.json'
             
             # Save as JSON
             with open(output_file, 'w') as f:
